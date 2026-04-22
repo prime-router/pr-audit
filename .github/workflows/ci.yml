@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go build ./...
+      - run: go test -race -cover ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "gofmt wants to change:"; echo "$out"; exit 1; fi
+      - run: go vet ./...
+
+  gocloc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go install github.com/hhatto/gocloc/cmd/gocloc@latest
+      - name: Enforce < 2000 Go code lines
+        run: |
+          lines=$(gocloc --not-match-d='testdata|vendor' --include-lang=Go . | awk '/^Go/ {print $5}')
+          echo "Go code lines: $lines"
+          if [ -z "$lines" ]; then echo "gocloc produced no Go line count"; exit 1; fi
+          if [ "$lines" -gt 2000 ]; then echo "::error::exceeds 2000 lines ($lines)"; exit 1; fi

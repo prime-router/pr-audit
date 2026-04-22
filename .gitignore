@@ -1,0 +1,33 @@
+# Build artifacts
+/pr-audit
+/pr-audit.exe
+/pr-audit-*
+/dist/
+/bin/
+
+# Test artifacts
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local dev
+/.env
+/tmp/
+/response.*
+/body.*
+/headers.*
