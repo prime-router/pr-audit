@@ -18,10 +18,12 @@ import (
 func RenderHuman(w io.Writer, r model.Result) {
 	c := newColorizer(w)
 
-	fmt.Fprintf(w, "pr-audit verify v%s\n\n", r.Version)
+	// Header is always "pr-audit v<X>" regardless of subcommand so the two
+	// commands feel like one tool. Per spec discussion (2026-04-22 review).
+	fmt.Fprintf(w, "pr-audit v%s\n\n", r.Version)
 
 	if r.Outcome == model.OutcomeParseError {
-		fmt.Fprintln(w, c.red("[✗] Input could not be parsed"))
+		fmt.Fprintln(w, c.red("[\u2717] Input could not be parsed"))
 		for _, ck := range r.Checks {
 			if ck.Message != "" {
 				fmt.Fprintf(w, "    %s\n", ck.Message)
@@ -31,9 +33,23 @@ func RenderHuman(w io.Writer, r model.Result) {
 		return
 	}
 
-	fmt.Fprintln(w, c.bold("[L1 · Self-consistency checks]"))
+	fmt.Fprintln(w, c.bold("[L1 \u00b7 Self-consistency checks]"))
 	for _, ck := range r.Checks {
 		renderCheck(w, c, ck)
+	}
+
+	// L3 section is replay-only; verify never populates L3Checks. We key on
+	// the slice (not Command) so RenderHuman remains a pure function of the
+	// Result document.
+	if len(r.L3Checks) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, c.bold("[L3 \u00b7 End-to-end replay]"))
+		if r.L3Strategy != "" {
+			fmt.Fprintf(w, "    %s\n", c.dim("strategy: "+string(r.L3Strategy)))
+		}
+		for _, ck := range r.L3Checks {
+			renderCheck(w, c, ck)
+		}
 	}
 
 	fmt.Fprintln(w)
@@ -79,6 +95,41 @@ func checkLabel(ck model.Check) string {
 			return "Usage field parsed from body"
 		}
 		return "Usage field not parseable"
+	case "parse_request":
+		return "Replay request file"
+	case "l3_strategy":
+		switch ck.Status {
+		case model.StatusPass:
+			return "L3 strategy ready"
+		case model.StatusSkip:
+			return "L3 strategy not run"
+		default:
+			return "L3 strategy"
+		}
+	case "prompt_tokens_match":
+		switch ck.Status {
+		case model.StatusPass:
+			return "prompt_tokens matches reported value"
+		case model.StatusFail:
+			return "prompt_tokens DOES NOT match reported value"
+		case model.StatusWarn:
+			return "prompt_tokens not reconciled (degraded)"
+		case model.StatusSkip:
+			return "prompt_tokens skipped"
+		default:
+			return "prompt_tokens"
+		}
+	case "model_match":
+		switch ck.Status {
+		case model.StatusPass:
+			return "model field matches request"
+		case model.StatusFail:
+			return "model field DOES NOT match request"
+		case model.StatusWarn:
+			return "model field absent from response body"
+		default:
+			return "model_match"
+		}
 	default:
 		return ck.Name
 	}
@@ -94,13 +145,37 @@ func renderVerdict(w io.Writer, c *colorizer, r model.Result) {
 	case model.OutcomeL1Unavailable:
 		fmt.Fprintf(w, "Result: %s\n", c.yellow("L1 UNAVAILABLE"))
 		fmt.Fprintln(w, "  PrimeRouter did not emit x-upstream-sha256 for this response.")
-		fmt.Fprintln(w, "  This is not a tampering signal — only that integrity attestation")
-		fmt.Fprintln(w, "  is not yet enabled. Absence of evidence ≠ evidence of absence.")
+		fmt.Fprintln(w, "  This is not a tampering signal \u2014 only that integrity attestation")
+		fmt.Fprintln(w, "  is not yet enabled. Absence of evidence \u2260 evidence of absence.")
 	case model.OutcomeL1Fail:
 		fmt.Fprintf(w, "Result: %s\n", c.red("L1 FAIL"))
 		fmt.Fprintln(w, "  Local SHA256 does not match PrimeRouter's declared value.")
 		fmt.Fprintln(w, "  Preserve response and declared header; confirm with L2/L3 before")
 		fmt.Fprintln(w, "  concluding this is intentional tampering (could also be a bug).")
+
+	// ── L3 verdicts (replay only) ────────────────────────────────────
+	case model.OutcomeNoEvidenceOfTampering:
+		fmt.Fprintf(w, "Result: %s\n", c.green("NO EVIDENCE OF TAMPERING"))
+		fmt.Fprintln(w, "  L1 self-consistency held AND L3 replay reconciled deterministic")
+		fmt.Fprintln(w, "  fields (prompt_tokens, model) against the upstream vendor.")
+		fmt.Fprintln(w, "  This is the strongest verdict pr-audit can produce; it does NOT")
+		fmt.Fprintln(w, "  prove the assistant text itself is uncensored or unchanged.")
+	case model.OutcomeL3Fail:
+		fmt.Fprintf(w, "Result: %s\n", c.red("L3 FAIL"))
+		fmt.Fprintln(w, "  Replay against the upstream vendor produced a different")
+		fmt.Fprintln(w, "  prompt_tokens or model than PrimeRouter reported. This is a")
+		fmt.Fprintln(w, "  tampering / mis-routing signal \u2014 stop and investigate before")
+		fmt.Fprintln(w, "  trusting any answers from the same gateway run.")
+	case model.OutcomeL3Skipped:
+		fmt.Fprintf(w, "Result: %s\n", c.yellow("L3 SKIPPED"))
+		fmt.Fprintln(w, "  L3 reconciliation could not run (vendor not supported or")
+		fmt.Fprintln(w, "  vendor-key missing). L1's verdict above still stands; for")
+		fmt.Fprintln(w, "  stronger evidence open the dashboard URL listed below.")
+	case model.OutcomeL3Degraded:
+		fmt.Fprintf(w, "Result: %s\n", c.yellow("L3 DEGRADED"))
+		fmt.Fprintln(w, "  Only structural fields (e.g. model) were reconciled; prompt_tokens")
+		fmt.Fprintln(w, "  could not be hard-checked (tools, multimodal, or upstream API down).")
+		fmt.Fprintln(w, "  Treat as weaker than NO EVIDENCE OF TAMPERING; rely on L2 dashboard.")
 	}
 }
 
@@ -124,11 +199,11 @@ func renderNextSteps(w io.Writer, c *colorizer, r model.Result) {
 	if len(r.NextSteps) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\n"+c.yellow("⚠  To obtain stronger evidence:"))
+	fmt.Fprintln(w, "\n"+c.yellow("\u26a0  To obtain stronger evidence:"))
 	for _, s := range r.NextSteps {
 		switch s.Level {
 		case "L2":
-			fmt.Fprintln(w, "\n  "+c.bold("[L2 · External attestation]"))
+			fmt.Fprintln(w, "\n  "+c.bold("[L2 \u00b7 External attestation]"))
 			if s.URL != "" {
 				fmt.Fprintln(w, "    Open the vendor dashboard and confirm this request exists:")
 				fmt.Fprintln(w, "      "+s.URL)
@@ -136,23 +211,48 @@ func renderNextSteps(w io.Writer, c *colorizer, r model.Result) {
 				fmt.Fprintln(w, "    Look up the trace-id in your upstream vendor's console.")
 			}
 		case "L3":
-			fmt.Fprintln(w, "\n  "+c.bold("[L3 · End-to-end replay (v0.2)]"))
-			fmt.Fprintln(w, "    Re-run the same request with your own vendor key:")
-			fmt.Fprintln(w, "      "+s.Command)
+			fmt.Fprintln(w, "\n  "+c.bold("[L3 \u00b7 End-to-end replay]"))
+			if s.Command != "" {
+				fmt.Fprintln(w, "    Re-run the same request with your own vendor key:")
+				fmt.Fprintln(w, "      "+s.Command)
+			} else {
+				fmt.Fprintln(w, "    Re-run the same request with your own vendor key (see `pr-audit replay --help`).")
+			}
 		}
 	}
 }
 
 func exitCodeGloss(r model.Result) string {
-	switch r.Outcome {
-	case model.OutcomeSelfConsistent:
-		return "L1 passed"
-	case model.OutcomeL1Unavailable:
-		return "L1 unavailable — not a failure"
-	case model.OutcomeL1Fail:
-		return "L1 failed — see details above"
-	case model.OutcomeParseError:
+	switch r.ExitCode {
+	case 0:
+		switch r.Outcome {
+		case model.OutcomeSelfConsistent:
+			return "L1 passed"
+		case model.OutcomeL1Unavailable:
+			return "L1 unavailable \u2014 not a failure"
+		case model.OutcomeNoEvidenceOfTampering:
+			return "L1 + L3 reconciled"
+		case model.OutcomeL3Skipped:
+			return "L3 skipped \u2014 not a failure"
+		case model.OutcomeL3Degraded:
+			return "L3 partial coverage"
+		default:
+			return "ok"
+		}
+	case 10:
+		return "L1 failed \u2014 see details above"
+	case 20:
 		return "parse error"
+	case 31:
+		return "network: DNS resolution failed"
+	case 32:
+		return "network: TLS handshake / certificate failed"
+	case 33:
+		return "network: upstream timeout or 5xx"
+	case 40:
+		return "L3 failed \u2014 see details above"
+	case 99:
+		return "internal error"
 	default:
 		return "internal error"
 	}
@@ -204,9 +304,9 @@ func (c *colorizer) dim(s string) string    { return c.wrap("2", s) }
 func iconFor(c *colorizer, s model.CheckStatus) (string, func(string) string) {
 	switch s {
 	case model.StatusPass:
-		return "[✓]", c.green
+		return "[\u2713]", c.green
 	case model.StatusFail:
-		return "[✗]", c.red
+		return "[\u2717]", c.red
 	case model.StatusWarn:
 		return "[!]", c.yellow
 	case model.StatusSkip:

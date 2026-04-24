@@ -1,0 +1,9 @@
+HTTP/1.1 100 Continue
+
+HTTP/1.1 200 OK
+content-type: application/json
+x-upstream-vendor: zhipu
+x-upstream-trace-id: 202604221622267d
+x-upstream-sha256: sha256:facadd17d5fd46d5d03d302fc79c50820f3264359bd26942a3c8b310a6685ba2
+
+{"id":"202604221622267d","model":"glm-4-flash","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}

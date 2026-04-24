@@ -2,7 +2,10 @@
 // Keep it small: only data, no behavior.
 package model
 
-import "net/http"
+import (
+	"encoding/json"
+	"net/http"
+)
 
 // Response is a saved PrimeRouter HTTP response ready to be verified.
 // BodyPath is the on-disk location so we can stream-hash without buffering.
@@ -55,6 +58,10 @@ const (
 	TrustL1Unavailable    TrustLevel = "L1_unavailable"
 	TrustL1SelfConsistent TrustLevel = "L1_self_consistent"
 	TrustL1Fail           TrustLevel = "L1_fail"
+	TrustL3NoEvidence     TrustLevel = "L3_no_evidence_of_tampering"
+	TrustL3Fail           TrustLevel = "L3_fail"
+	TrustL3Skipped        TrustLevel = "L3_skipped"
+	TrustL3Degraded       TrustLevel = "L3_degraded"
 )
 
 // Outcome is the single-word verdict we echo to users and CI.
@@ -62,11 +69,46 @@ const (
 type Outcome string
 
 const (
-	OutcomeSelfConsistent Outcome = "self_consistent"
-	OutcomeL1Unavailable  Outcome = "l1_unavailable"
-	OutcomeL1Fail         Outcome = "l1_fail"
-	OutcomeParseError     Outcome = "parse_error"
+	OutcomeSelfConsistent        Outcome = "self_consistent"
+	OutcomeL1Unavailable         Outcome = "l1_unavailable"
+	OutcomeL1Fail                Outcome = "l1_fail"
+	OutcomeParseError            Outcome = "parse_error"
+	OutcomeNoEvidenceOfTampering Outcome = "no_evidence_of_tampering"
+	OutcomeL3Fail                Outcome = "l3_fail"
+	OutcomeL3Skipped             Outcome = "l3_skipped"
+	OutcomeL3Degraded            Outcome = "l3_degraded"
 )
+
+// L3Strategy names which reconciliation method replay used (or why it didn't).
+type L3Strategy string
+
+const (
+	L3TiktokenOffline L3Strategy = "tiktoken_offline"
+	L3CountTokensAPI  L3Strategy = "count_tokens_api"
+	L3Structural      L3Strategy = "structural"
+	L3Skipped         L3Strategy = "skipped"
+)
+
+// ReplayParams captures replay's CLI inputs after flag parsing.
+// VendorKey is never serialised — see internal/output/json.go and §9 of the spec.
+type ReplayParams struct {
+	HeadersPath  string
+	BodyPath     string
+	ResponsePath string
+	RequestPath  string
+	VendorKey    string
+}
+
+// ReplayRequest is the original request JSON the user saved before calling
+// PrimeRouter. We only unmarshal the fields we need; Messages and Tools
+// are kept as raw bytes so vendor-specific reconcilers can re-encode them
+// without lossy round-tripping.
+type ReplayRequest struct {
+	Model    string          `json:"model"`
+	Messages json.RawMessage `json:"messages"`
+	Tools    json.RawMessage `json:"tools,omitempty"`
+	Stream   bool            `json:"stream,omitempty"`
+}
 
 // NextStep points the user at a stronger verification layer (L2/L3).
 type NextStep struct {
@@ -97,4 +139,9 @@ type Result struct {
 	NextSteps         []NextStep `json:"next_steps,omitempty"`
 	Outcome           Outcome    `json:"result"`
 	ExitCode          int        `json:"exit_code"`
+
+	// L3 fields — populated only by the replay command. omitempty keeps
+	// verify's existing JSON output byte-identical for L1-only consumers.
+	L3Strategy L3Strategy `json:"l3_strategy,omitempty"`
+	L3Checks   []Check    `json:"l3_checks,omitempty"`
 }

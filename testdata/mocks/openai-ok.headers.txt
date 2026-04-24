@@ -1,0 +1,6 @@
+HTTP/2 200
+content-type: application/json
+x-upstream-vendor: openai
+x-upstream-trace-id: req_test_openai_ok
+x-upstream-sha256: sha256:e639606df6a273c66ada7bc630e8d8cc7a021860596214a10d9478eaea678dba
+

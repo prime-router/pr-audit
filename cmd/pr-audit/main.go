@@ -3,38 +3,28 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/spf13/cobra"
 )
 
 var version = "v0.1.0-dev"
 
-const usage = `pr-audit — PrimeRouter response integrity audit
+var rootCmd = &cobra.Command{
+	Use:           "pr-audit",
+	Short:         "PrimeRouter response integrity audit",
+	Long:          "pr-audit audits PrimeRouter LLM-gateway response integrity via a three-tier trust model (L1 local hash, L2 vendor dashboard, L3 replay).",
+	SilenceErrors: true,
+	SilenceUsage:  true,
+	Version:       version,
+}
 
-Usage:
-  pr-audit <command> [options]
-
-Commands:
-  verify      Verify a saved PrimeRouter response (L1 self-consistency + L2 hints)
-  --version   Print version
-  --help      Print this help
-
-Run 'pr-audit <command> --help' for command-specific options.
-`
+func init() {
+	rootCmd.SetVersionTemplate("pr-audit {{.Version}}\n")
+}
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
-	}
-	switch os.Args[1] {
-	case "--version", "-v", "version":
-		fmt.Println("pr-audit", version)
-	case "--help", "-h", "help":
-		fmt.Print(usage)
-	case "verify":
-		os.Exit(runVerify(os.Args[2:]))
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
